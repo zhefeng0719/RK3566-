@@ -1,4 +1,6 @@
-# RK3566 ONVIF RTSP YOLO LCD Pipeline
+# RK3566智能摄像头推理终端
+
+RK3566 ONVIF RTSP YOLO LCD Pipeline
 
 这是一个面向 RK3566 Buildroot 环境的网络摄像头视频处理示例工程。程序通过 ONVIF 获取摄像头 RTSP 地址，使用 FFmpeg 调用 Rockchip MPP 硬解码 H.264/H.265 视频流，再使用 RGA 做图像格式转换和缩放，最后通过 RKNN/NPU 执行 YOLO 推理，并把叠加检测框后的画面显示到 Linux framebuffer。
 
