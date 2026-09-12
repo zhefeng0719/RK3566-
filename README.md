@@ -462,6 +462,223 @@ bin/onvif_yolo_lcd
 - pthread
 - math
 
+## 自定义镜像运行环境要求
+
+如果不使用作者预先验证过的系统镜像，而是在自己的 RK3566/RK3568 Linux 镜像上部署，需要确认 rootfs、内核驱动和用户态库满足下面条件。
+
+### 1. 必要设备节点
+
+板卡系统需要暴露 MPP、RGA、DRM/dma-buf 和 framebuffer 相关节点：
+
+```sh
+ls -l /dev/mpp_service /dev/rga /dev/fb0
+ls -l /dev/dri
+```
+
+典型节点包括：
+
+```text
+/dev/mpp_service        # Rockchip MPP 硬编解码服务
+/dev/rga                # Rockchip RGA 图像处理设备
+/dev/dri/renderD128     # DRM render node，用于 dma-buf/DRM 相关能力
+/dev/fb0                # Linux framebuffer，当前 LCD 调试显示使用它
+```
+
+如果缺少这些节点，程序可能无法硬解码、无法使用 RGA，或者无法显示到 LCD。
+
+### 2. 必要动态库
+
+板卡 rootfs 中需要有下面这些动态库：
+
+```sh
+ls /usr/lib/libavformat.so*
+ls /usr/lib/libavcodec.so*
+ls /usr/lib/libavutil.so*
+ls /usr/lib/librga.so*
+ls /usr/lib/librknnrt.so*
+ls /usr/lib/librockchip_mpp.so*
+```
+
+如果 `librknnrt.so` 不在 `/usr/lib`，运行前需要把它所在目录加入 `LD_LIBRARY_PATH`，例如：
+
+```sh
+export LD_LIBRARY_PATH=/rockchip_test/npu2/lib:/usr/lib:$LD_LIBRARY_PATH
+```
+
+### 3. FFmpeg 必须支持 Rockchip MPP
+
+普通 FFmpeg 不一定带 Rockchip 硬解码支持。需要确认 FFmpeg 编译时启用了：
+
+```text
+--enable-rkmpp
+--enable-libdrm
+```
+
+板卡上检查：
+
+```sh
+ffmpeg -hide_banner -decoders | grep rkmpp
+ffmpeg -hide_banner -h decoder=h264_rkmpp
+```
+
+至少应能看到：
+
+```text
+h264_rkmpp
+hevc_rkmpp
+```
+
+本项目在代码中会优先选择：
+
+```text
+h264_rkmpp
+hevc_rkmpp
+```
+
+如果镜像里的 FFmpeg 没有这些解码器，RTSP 可以打开，但无法走 MPP 硬解码。
+
+### 4. RGA 环境
+
+RGA 需要内核驱动和用户态库同时可用：
+
+```sh
+ls -l /dev/rga
+ls /usr/lib/librga.so*
+```
+
+程序运行时如果 RGA 初始化正常，日志中通常会出现类似：
+
+```text
+rga_api version ...
+```
+
+RGA 在本项目中负责两类转换：
+
+```text
+NV12/dma-buf -> RGB888     # YOLO 输入
+NV12/dma-buf -> BGRA8888   # LCD 显示
+```
+
+### 5. RKNN / NPU 环境
+
+需要 RKNN Runtime、NPU 驱动和模型版本兼容：
+
+```sh
+find / -name 'librknnrt.so*' 2>/dev/null
+find / -iname '*rknn*' 2>/dev/null | head
+```
+
+程序启动时应能打印 RKNN Runtime 和 driver 信息，例如：
+
+```text
+rknn api: ...
+driver: ...
+YOLO input: ...
+YOLO output...
+```
+
+如果模型来自自己训练，需要确认：
+
+- 模型已经转换为 `.rknn`；
+- 模型 target platform 与板卡 NPU 匹配；
+- 模型输入格式与本项目一致，推荐 RGB888 / NHWC；
+- 模型输出结构与 `infer/yolo_postprocess_c.c` 的 YOLO 后处理逻辑兼容。
+
+### 6. LCD / framebuffer 环境
+
+当前显示模块使用 Linux framebuffer：
+
+```text
+/dev/fb0
+```
+
+检查：
+
+```sh
+ls -l /dev/fb0
+cat /sys/class/graphics/fb0/virtual_size
+cat /sys/class/graphics/fb0/modes
+```
+
+当前代码要求 framebuffer 是 32bpp，并通过 `pwrite()` 写整屏 BGRA8888 数据。如果系统运行了 weston、wayland 或其他 DRM/KMS 显示服务，可能会覆盖 framebuffer 输出，需要在自己的启动脚本中处理显示占用。
+
+### 7. 摄像头和网络环境
+
+摄像头和 RK3566 需要在同一个局域网，至少满足：
+
+```text
+RK3566 能访问摄像头 ONVIF 端口
+RK3566 能访问摄像头 RTSP 端口
+```
+
+常见端口：
+
+```text
+ONVIF: 80 / 2020 / 8899 等，取决于摄像头
+RTSP : 554
+```
+
+检查示例：
+
+```sh
+ping <camera-ip>
+```
+
+如果系统带 `nc`，可以继续检查端口：
+
+```sh
+nc -vz <camera-ip> 554
+nc -vz <camera-ip> <onvif-port>
+```
+
+摄像头建议支持：
+
+- ONVIF；
+- RTSP；
+- H.264 或 H.265；
+- 子码流。
+
+推荐优先使用子码流，例如：
+
+```text
+640x360 / 640x480 / 720p
+H.264
+15~25 fps
+```
+
+主码流分辨率高、码率高，适合录像或高清预览；子码流更适合 RK3566 上的低延迟 AI 推理和 LCD 调试显示。
+
+### 8. 最小运行文件
+
+如果系统环境已经满足，板卡上最小只需要放：
+
+```text
+onvif_yolo_lcd
+model/person_yolov5n_640_raw_heads.rknn
+model/person_labels.txt
+```
+
+推荐目录：
+
+```text
+/userdata/Project/RC/
+├── onvif_yolo_lcd
+└── model/
+    ├── person_yolov5n_640_raw_heads.rknn
+    └── person_labels.txt
+```
+
+一句话总结，自定义镜像至少需要具备：
+
+```text
+FFmpeg + rkmpp
+MPP 驱动和库
+RGA 驱动和库
+RKNN Runtime 和 NPU 驱动
+/dev/fb0 framebuffer
+同网段可访问的 ONVIF/RTSP 摄像头
+```
+
 ## 部署到板卡
 
 示例路径：
