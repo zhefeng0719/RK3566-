@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.rknn binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.bmp binary
+*.pcap binary
+*.pcapng binary
+*.h264 binary
+*.ts binary
+*.raw binary

@@ -1,0 +1,19 @@
+# Build outputs
+bin/
+obj/
+
+# Local test logs may contain private IPs, WiFi names, camera usernames, or passwords.
+rc_test_log.dat
+*.log
+
+# Packet captures and temporary dumps
+*.pcap
+*.pcapng
+*.h264
+*.ts
+*.raw
+
+# Editor/system files
+.vscode/
+.DS_Store
+Thumbs.db
